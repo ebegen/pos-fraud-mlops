@@ -1,0 +1,35 @@
+# Model storage + a Job that trains the grid and promotes the winner to /models/champion.
+# In production Airflow triggers this Job (KubernetesPodOperator) instead of training in-process.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fraud-models
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: { storage: 1Gi }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fraud-train
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, fsGroup: 1000 }
+      containers:
+        - name: train
+          image: pos-fraud-mlops:local
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "fraudops.train", "--out", "/models/candidate", "--promote-to", "/models/champion"]
+          resources:
+            requests: { cpu: "1", memory: 1Gi }
+            limits: { cpu: "4", memory: 2Gi }
+          volumeMounts:
+            - { name: models, mountPath: /models }
+      volumes:
+        - name: models
+          persistentVolumeClaim: { claimName: fraud-models }

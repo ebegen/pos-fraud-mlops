@@ -1,0 +1,7 @@
+FROM apache/airflow:3.3.2-python3.12
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm -rf /var/lib/apt/lists/*
+USER airflow
+COPY --chown=airflow pyproject.toml README.md /opt/fraud/src-pkg/
+COPY --chown=airflow src /opt/fraud/src-pkg/src
+RUN pip install --no-cache-dir /opt/fraud/src-pkg httpx

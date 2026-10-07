@@ -1,0 +1,90 @@
+# Full local stack:  docker compose up -d --build
+#   API        http://localhost:8000/docs
+#   Demo       http://localhost:7860
+#   Grafana    http://localhost:3001   (anonymous viewer; admin/admin to edit)
+#   Prometheus http://localhost:9090
+#   MLflow     http://localhost:5050
+#   Airflow    http://localhost:8080   (profile "airflow": docker compose --profile airflow up -d)
+
+x-app: &app
+  image: pos-fraud-mlops:local  # built once by the bootstrap service
+  volumes:
+    - ./models:/app/models
+  environment:
+    MODEL_DIR: /app/models/champion
+    MLFLOW_TRACKING_URI: http://mlflow:5000
+
+services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.16.1
+    command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:////mlflow/mlflow.db --artifacts-destination /mlflow/artifacts --serve-artifacts --allowed-hosts "*"
+    volumes: [mlflow:/mlflow]
+    ports: ["5050:5000"]
+
+  # first model: trains the grid once if there is no champion yet, then exits
+  bootstrap:
+    <<: *app
+    build: { context: ., dockerfile: docker/Dockerfile }
+    command: sh -c 'test -f /app/models/champion/model.joblib || python -m fraudops.train --out /app/models/candidate --promote-to /app/models/champion'
+    depends_on: [mlflow]
+    restart: "no"
+
+  api:
+    <<: *app
+    ports: ["8000:8000"]
+    depends_on:
+      bootstrap: { condition: service_completed_successfully }
+
+  demo:
+    <<: *app
+    command: python -m fraudops.demo
+    environment: { API_URL: http://api:8000 }
+    ports: ["7860:7860"]
+    depends_on: [api]
+    healthcheck: { disable: true }
+
+  prometheus:
+    image: prom/prometheus:v3.13.4
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports: ["9090:9090"]
+    depends_on: [api]
+
+  grafana:
+    image: grafana/grafana:13.0.10
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/fraud.json
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3001:3000"]
+    depends_on: [prometheus]
+
+  airflow:
+    profiles: [airflow]
+    build: { context: ., dockerfile: docker/Dockerfile.airflow }
+    image: pos-fraud-airflow:local
+    command: standalone
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      FRAUD_MODELS: /opt/fraud/models
+      FRAUD_DATA: /opt/fraud/data
+      FRAUD_API: http://api:8000
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_DISABLE_AGENT_HINT: "1"
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "true"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./models:/opt/fraud/models
+      - ./data:/opt/fraud/data
+    ports: ["8080:8080"]
+    depends_on: [api, mlflow]
+
+volumes:
+  mlflow:

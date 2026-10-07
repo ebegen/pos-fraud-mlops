@@ -1,0 +1,34 @@
+groups:
+  - name: fraud-model
+    rules:
+      - alert: FeatureDrift
+        expr: fraud_drift_max_psi > 0.2
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: "Input drift: max PSI {{ $value | printf \"%.2f\" }} (> 0.2)"
+          description: "Live tickets no longer look like the training data. The fraud_retrain DAG should retrain and gate a new model."
+
+      - alert: FlagRateAnomaly
+        expr: |
+          sum(rate(fraud_predictions_total{decision="fraud"}[5m])) / sum(rate(fraud_predictions_total[5m])) > 0.05
+          or
+          sum(rate(fraud_predictions_total{decision="fraud"}[5m])) / sum(rate(fraud_predictions_total[5m])) < 0.003
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Flag rate {{ $value | humanizePercentage }} is outside the expected 0.3%-5% band"
+
+      - alert: HighLatencyP95
+        expr: histogram_quantile(0.95, sum by (le) (rate(fraud_request_latency_seconds_bucket[5m]))) > 0.25
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "p95 scoring latency {{ $value | humanizeDuration }}"
+
+      - alert: ErrorRate
+        expr: sum(rate(fraud_requests_total{status="error"}[5m])) / sum(rate(fraud_requests_total[5m])) > 0.01
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "More than 1% of scoring requests fail"
