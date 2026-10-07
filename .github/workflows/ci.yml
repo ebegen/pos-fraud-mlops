@@ -13,8 +13,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-        with: { python-version: "3.12" }
-      - run: uv pip install --system -e ".[dev]"
+        # runner's system Python is externally managed: install into an activated venv
+        with: { python-version: "3.12", activate-environment: true }
+      - run: uv pip install -e ".[dev]"
       - run: ruff check .
       - run: pytest -q
       - name: Train a model and check the quality bar
